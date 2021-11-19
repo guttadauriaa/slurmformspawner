@@ -91,6 +91,15 @@ class SbatchForm(Configurable):
         help="Define the list of available reservations."
     ).tag(config=True)
 
+    partition = SelectWidget(
+        {
+            'def' : 'gpu',
+            'choices' : lambda api, user: api.get_partitions(),
+            'lock' : False
+        },
+        help="Define the list of available partitions."
+    ).tag(config=True)
+
     ui = SelectWidget(
         {
             'lock' : False,
@@ -115,7 +124,8 @@ class SbatchForm(Configurable):
             'memory'  : IntegerField('Memory (MB)',  validators=[InputRequired(), NumberRange()], widget=NumberInput()),
             'gpus'    : SelectField('GPU configuration', validators=[AnyOf([])]),
             'oversubscribe' : BooleanField('Enable core oversubscription?'),
-            'reservation' : SelectField("Reservation", validators=[AnyOf([])])
+            'reservation' : SelectField("Reservation", validators=[AnyOf([])]),
+            'partition' : SelectField('Partition', validators=[AnyOf([])])
         }
         self.form = BaseForm(fields)
         self.form['runtime'].filters = [float]
@@ -167,6 +177,7 @@ class SbatchForm(Configurable):
         self.config_gpus()
         self.config_reservations()
         self.config_account()
+        self.config_partitions()
         return Template(self.template).render(form=self.form)
 
     def config_runtime(self):
@@ -301,3 +312,18 @@ class SbatchForm(Configurable):
         if lock:
             self.form['reservation'].render_kw = {'disabled': 'disabled'}
         self.form['reservation'].validators[-1].values = [key for key, value in self.form['reservation'].choices]
+
+    def config_partitions(self):
+        keys = self.resolve(self.partition.get('choices'))
+        prev = self.form['partition'].data
+        if keys:
+            choices = list(zip(keys, keys))
+        else:
+            keys = [""]
+            choices = [("", "None")]
+
+        self.form['partition'].choices = choices
+        self.form['partition'].validators[-1].values = keys
+
+        if self.resolve(self.partition.get('lock')):
+            self.form['partition'].render_kw = {'disabled': 'disabled'}

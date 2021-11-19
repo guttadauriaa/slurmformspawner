@@ -1,5 +1,6 @@
 #!/bin/bash
 {% if account %}#SBATCH --account={{account}}{% endif %}
+{% if partition %}#SBATCH --partition={{partition}}{% endif %}
 #SBATCH --time={{runtime}}
 #SBATCH --output={{homedir}}/.jupyterhub_slurmspawner_%j.log
 #SBATCH --job-name=spawner-jupyterhub

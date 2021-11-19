@@ -59,6 +59,21 @@ class SlurmAPI(SingletonConfigurable):
             return []
         return string.split()
 
+    def get_partitions(self):
+        try:
+            partitions = check_output(['sinfo', '-h', '--format=%P'], encoding='utf-8')
+
+            print(partitions)
+
+        except CalledProcessError:
+            return []
+        else:
+            if partitions:
+                partitions = partitions.strip().split('\n')
+            else:
+                partitions = []
+        return partitions
+
     @cachedmethod(attrgetter('res_cache'))
     def get_reservations(self):
         try:
