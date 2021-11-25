@@ -100,6 +100,15 @@ class SbatchForm(Configurable):
         help="Define the list of available partitions."
     ).tag(config=True)
 
+    nodelist = SelectWidget(
+        {
+            'def': '',
+            'choices': lambda api, user: api.get_nodelist(),
+            'lock': False
+        },
+        help="Define the list of available nodes."
+    ).tag(config=True)
+
     ui = SelectWidget(
         {
             'lock' : False,
@@ -125,7 +134,8 @@ class SbatchForm(Configurable):
             'gpus'    : SelectField('GPU configuration', validators=[AnyOf([])]),
             'oversubscribe' : BooleanField('Enable core oversubscription?'),
             'reservation' : SelectField("Reservation", validators=[AnyOf([])]),
-            'partition' : SelectField('Partition', validators=[AnyOf([])])
+            'partition' : SelectField('Partition', validators=[AnyOf([])]),
+            'nodelist': SelectField('Node list', validators=[AnyOf([])])
         }
         self.form = BaseForm(fields)
         self.form['runtime'].filters = [float]
@@ -178,6 +188,7 @@ class SbatchForm(Configurable):
         self.config_reservations()
         self.config_account()
         self.config_partitions()
+        self.config_nodelist()
         return Template(self.template).render(form=self.form)
 
     def config_runtime(self):
@@ -327,3 +338,22 @@ class SbatchForm(Configurable):
 
         if self.resolve(self.partition.get('lock')):
             self.form['partition'].render_kw = {'disabled': 'disabled'}
+
+    def config_nodelist(self):
+        keys = self.resolve(self.nodelist.get('choices'))
+        pref = self.form['nodelist'].data
+        if keys:
+            choices = [("", "None")]
+
+            for item in keys.items():
+                choices.append((item[0],"{} ({})".format(item[0],item[1])))
+        else:
+            keys = [""]
+            choices = [("", "None")]
+
+        self.form['nodelist'].choices = choices
+        self.form['nodelist'].validators[-1].values = keys
+
+        if self.resolve(self.nodelist.get('lock')):
+            self.form['nodelist'].render_kw = {'disabled': 'disabled'}
+

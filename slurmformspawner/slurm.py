@@ -72,6 +72,29 @@ class SlurmAPI(SingletonConfigurable):
                 partitions = []
         return partitions
 
+    def get_nodelist(self):
+        try:
+            nodes = check_output(['sinfo', '-h', '--format=%n,%P'], encoding='utf-8')
+
+        except CalledProcessError:
+            return []
+        else:
+            if nodes:
+                nodes = nodes.strip().split('\n')
+
+                values = {}
+                for item in nodes:
+                    (key, val) = tuple(item.split(','))
+                    if values.get(key):
+                        if values[key].find(val) == -1:
+                            values[key] = values[key] + ',' + val
+                    else:
+                        values[key] = val
+            else:
+                nodes = []
+
+        return values;
+
     @cachedmethod(attrgetter('res_cache'))
     def get_reservations(self):
         try:
