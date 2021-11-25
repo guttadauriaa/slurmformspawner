@@ -93,7 +93,7 @@ class SbatchForm(Configurable):
 
     partition = SelectWidget(
         {
-            'def' : 'gpu',
+            'def' : '',
             'choices' : lambda api, user: api.get_partitions(),
             'lock' : False
         },
