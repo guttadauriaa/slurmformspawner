@@ -63,8 +63,6 @@ class SlurmAPI(SingletonConfigurable):
         try:
             partitions = check_output(['sinfo', '-h', '--format=%P'], encoding='utf-8')
 
-            print(partitions)
-
         except CalledProcessError:
             return []
         else:
