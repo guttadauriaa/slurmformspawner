@@ -1,10 +1,9 @@
 import os
 import sys
 
-from collections import defaultdict
-
+from jupyterhub import __version__ as hub_version
 from batchspawner import SlurmSpawner
-from traitlets import Integer, CBool, Unicode, Float, Set, Dict
+from traitlets import CBool, Unicode, Dict
 
 from . form import SbatchForm
 from . slurm import SlurmAPI
@@ -19,14 +18,14 @@ class SlurmFormSpawner(SlurmSpawner):
         {
             'notebook' : {
                 'name' : 'Jupyter Notebook',
+                'url' : '/tree',
             },
             'lab' : {
                 'name' : 'JupyterLab',
-                'args' : ['--SingleUserNotebookApp.default_url=/lab']
             },
             'terminal' : {
                 'name' : 'Terminal',
-                'args' : ['--SingleUserNotebookApp.default_url=/terminals/1']
+                'url' : '/terminals/1',
             },
         },
         help="Dictionary of dictionaries describing the names and args of UI options"
@@ -60,7 +59,8 @@ class SlurmFormSpawner(SlurmSpawner):
                                slurm_api=self.slurm_api,
                                ui_args=self.ui_args,
                                user_options=self.orm_spawner.user_options or {},
-                               config=self.config)
+                               config=self.config,
+                               hub_version=hub_version)
 
         self.batch_submit_cmd = self.batch_submit_cmd.format(
             username='{username}',
@@ -95,6 +95,14 @@ class SlurmFormSpawner(SlurmSpawner):
         args = super().get_args()
         ui = self.form.data.get('ui')
         return args + self.ui_args[ui].get('args', [])
+
+    def get_env(self):
+        env = super().get_env()
+        ui = self.form.data.get('ui')
+        url = self.ui_args[ui].get('url', None)
+        if url:
+            env["JUPYTERHUB_DEFAULT_URL"] = url
+        return env
 
     @property
     def options_form(self):

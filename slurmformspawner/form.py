@@ -5,14 +5,13 @@ import sys
 from functools import partial
 from datetime import datetime
 
+from packaging.version import parse as parse_version
 from jinja2 import Template
 
 from traitlets.config.configurable import Configurable
-from traitlets import Integer, CBool, Unicode, Float, Set, Dict, Unicode
+from traitlets import Unicode, Dict, Unicode
 
-from jupyterhub.traitlets import Callable
-
-from wtforms import BooleanField, DecimalField, SelectField, StringField, Form, RadioField
+from wtforms import BooleanField, DecimalField, SelectField
 from wtforms.form import BaseForm
 from wtforms.validators import InputRequired, NumberRange, AnyOf
 from wtforms.fields.html5 import IntegerField
@@ -118,12 +117,21 @@ class SbatchForm(Configurable):
         help="Define the list of available user interface."
     ).tag(config=True)
 
+    partition = SelectWidget(
+        {
+            'lock' : True,
+            'def' : '',
+            'choices' : lambda api, user: api.get_partitions()
+        },
+        help="Define the list of available slurm partitions."
+    ).tag(config=True)
+
     form_template_path = Unicode(
         os.path.join(sys.prefix, 'share', 'slurmformspawner', 'templates', 'form.html'),
         help="Path to the Jinja2 template of the form"
     ).tag(config=True)
 
-    def __init__(self, username, slurm_api, ui_args, user_options = {}, config=None):
+    def __init__(self, username, slurm_api, ui_args, hub_version, user_options = {}, config=None):
         super().__init__(config=config)
         fields = {
             'account' : SelectField("Account", validators=[AnyOf([])]),
@@ -141,6 +149,10 @@ class SbatchForm(Configurable):
         self.form['runtime'].filters = [float]
         self.resolve = partial(resolve, api=slurm_api, user=username)
         self.ui_args = ui_args
+        if parse_version(hub_version) >= parse_version('5.0.0'):
+            self.bootstrap_version = 5
+        else:
+            self.bootstrap_version = 3
 
         with open(self.form_template_path, 'r') as template_file:
             self.template = template_file.read()
@@ -187,9 +199,9 @@ class SbatchForm(Configurable):
         self.config_gpus()
         self.config_reservations()
         self.config_account()
-        self.config_partitions()
+        self.config_partition()
         self.config_nodelist()
-        return Template(self.template).render(form=self.form)
+        return Template(self.template).render(form=self.form, bootstrap_version=self.bootstrap_version)
 
     def config_runtime(self):
         lock = self.resolve(self.runtime.get('lock'))
@@ -275,20 +287,49 @@ class SbatchForm(Configurable):
         lock = self.resolve(self.gpus.get('lock'))
 
         gpu_choice_map = {}
-        for gres in choices:
-            if gres == 'gpu:0':
+        # if the node has shards, we need the number of gpus and number of shards
+        max_shard_per_gpu = 0
+        gpu_types = set()
+        for choice in choices:
+            if choice == 'gpu:0':
                 gpu_choice_map['gpu:0'] = 'None'
                 continue
-            match = re.match(r"(gpu:[\w:]+)", gres)
-            if match:
-                gres = match.group(1).split(':')
-                number = int(gres[-1])
-                if len(gres) == 2:
-                    strings = ('gpu:{}', '{} x GPU')
-                elif len(gres) > 2:
-                    strings = ('gpu:{}:{{}}'.format(gres[1]), '{{}} x {}'.format(gres[1].upper()))
-                for i in range(1, number + 1):
-                    gpu_choice_map[strings[0].format(i)] = strings[1].format(i)
+
+            # we now have one choice per type of gres configuration to support
+            # heterogenous cluster configuration, each node could have multiple types of gres
+            gres_list = choice.split(',')
+
+            total_gpu = 0
+            num_shard = 0
+            gpu_type = ''
+            for gres_def in gres_list:
+                match = re.match(r"(gpu:[\w:.]+)", gres_def)
+                if match:
+                    gres = match.group(1).split(':')
+                    number = int(gres[-1])
+                    total_gpu += number
+                    if len(gres) == 2:
+                        strings = ('gpu:{}', '{} x GPU')
+                        gpu_type = 'GPU'
+                    elif len(gres) > 2:
+                        strings = ('gpu:{}:{{}}'.format(gres[1]), '{{}} x {}'.format(gres[1].upper()))
+                        gpu_type = gres[1].upper()
+                    for i in range(1, number + 1):
+                        gpu_choice_map[strings[0].format(i)] = strings[1].format(i)
+                else:
+                    match = re.match(r"(shard:[\w:.]+)", gres_def)
+                    if match:
+                        gres = match.group(1).split(':')
+                        num_shard = int(gres[-1])
+            if num_shard > 0:
+                gpu_types.add(gpu_type)
+            max_shard_per_gpu = max(max_shard_per_gpu, int(num_shard / total_gpu))
+
+        if max_shard_per_gpu > 0:
+            strings = ('shard:{}', '{}/{} x ({})')
+            for i in range(1, max_shard_per_gpu):
+                gpu_choice_map[strings[0].format(i)] = strings[1].format(i, max_shard_per_gpu, '|'.join(gpu_types))
+
         self.form['gpus'].choices = list(gpu_choice_map.items())
         if lock:
             self.form['gpus'].render_kw = {'disabled': 'disabled'}
@@ -303,41 +344,39 @@ class SbatchForm(Configurable):
         if lock:
             self.form['ui'].render_kw = {'disabled': 'disabled'}
 
+    def config_partition(self):
+        choices = self.resolve(self.partition.get('choices'))
+        lock = self.resolve(self.partition.get('lock'))
+        def_ = self.resolve(self.partition.get('def'))
+
+        # Since Python 3.6, the standard dict type maintains insertion order by default.
+        # The first choice is default selected by WTForms.
+        partition_choice_map = {def_: def_}
+        for partition in choices:
+            partition_choice_map[partition] = partition
+
+        self.form['partition'].choices = list(partition_choice_map.items())
+        self.form['partition'].validators[-1].values = [key for key, value in self.form['partition'].choices]
+
+        if lock:
+            self.form['partition'].render_kw = {'disabled': 'disabled'}
+
     def config_reservations(self):
         choices = self.resolve(self.reservation.get('choices'))
         lock = self.resolve(self.reservation.get('lock'))
-        prev = self.form['reservation'].data
         if choices is None:
             choices = []
 
         now = datetime.now()
-        prev_is_valid = False
         self.form['reservation'].choices = [("", "None")]
         for rsv in choices:
             name = rsv['ReservationName']
             duration = rsv['EndTime'] - now
             string = '{} - time left: {}'.format(name, duration)
             self.form['reservation'].choices.append((name, string))
-            if prev == name:
-                prev_is_valid = True
         if lock:
             self.form['reservation'].render_kw = {'disabled': 'disabled'}
         self.form['reservation'].validators[-1].values = [key for key, value in self.form['reservation'].choices]
-
-    def config_partitions(self):
-        keys = self.resolve(self.partition.get('choices'))
-        prev = self.form['partition'].data
-        if keys:
-            choices = list(zip(keys, keys))
-        else:
-            keys = [""]
-            choices = [("", "None")]
-
-        self.form['partition'].choices = choices
-        self.form['partition'].validators[-1].values = keys
-
-        if self.resolve(self.partition.get('lock')):
-            self.form['partition'].render_kw = {'disabled': 'disabled'}
 
     def config_nodelist(self):
         keys = self.resolve(self.nodelist.get('choices'))

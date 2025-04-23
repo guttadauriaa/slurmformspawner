@@ -3,7 +3,6 @@ from traitlets.config import SingletonConfigurable
 from traitlets import Integer
 
 from datetime import datetime
-from json import loads
 from subprocess import check_output, CalledProcessError
 
 from cachetools import TTLCache, cachedmethod
@@ -13,25 +12,35 @@ class SlurmAPI(SingletonConfigurable):
     acct_cache_ttl = Integer(300).tag(config=True)
     acct_cache_size = Integer(100).tag(config=True)
     res_cache_ttl = Integer(300).tag(config=True)
+    nodelist_cache_ttl = Integer(300).tag(config=True)
 
     def __init__(self, config=None):
         super().__init__(config=config)
         self.info_cache = TTLCache(maxsize=1, ttl=self.info_cache_ttl)
         self.acct_cache = TTLCache(maxsize=self.acct_cache_size, ttl=self.acct_cache_ttl)
         self.res_cache = TTLCache(maxsize=1, ttl=self.res_cache_ttl)
+        self.nodelist_cache = TTLCache(maxsize=1, ttl=self.nodelist_cache_ttl)
 
     @cachedmethod(attrgetter('info_cache'))
     def get_node_info(self):
-        output = {'cpu': [], 'mem': [], 'gres': []}
+        output = {'cpu': [], 'mem': [], 'gres': [], 'partitions': []}
         try:
-            infos = check_output(['sinfo', '-h', '-e',
-                                '--format={"cpu":%c,"mem":%m,"gres":"%G"}'], encoding='utf-8')
+            controls = check_output(['scontrol', '-o', 'show', 'node'], encoding='utf-8')
         except CalledProcessError:
             return output
         else:
-            infos = [loads(i) for i in infos.split('\n') if i]
-            infos = {key: [dict_[key] for dict_ in infos] for key in infos[0]}
-        return infos
+            nodes = [
+                dict([
+                    item.split('=', 1) for item in line.split(' ') if '=' in item
+                ])
+                for line in controls.split("\n") if line
+            ]
+            for node in nodes:
+                output['cpu'].append(int(node['CPUTot']))
+                output['mem'].append(int(node['RealMemory']) - int(node.get('MemSpecLimit', '0')))
+                output['gres'].extend([node['Gres']])
+                output['partitions'].extend(node['Partitions'].split(","))
+        return output
 
     def is_online(self):
         return self.get_node_info()['cpu'] and self.get_node_info()['mem']
@@ -50,32 +59,14 @@ class SlurmAPI(SingletonConfigurable):
             gres.remove('(null)')
         return ['gpu:0'] + sorted(gres)
 
-    @cachedmethod(attrgetter('acct_cache'))
-    def get_accounts(self, username):
-        try:
-            string = check_output(['sacctmgr', 'show', 'user', username, 'withassoc',
-                                    'format=account', '-P', '--noheader'], encoding='utf-8')
-        except CalledProcessError:
-            return []
-        return string.split()
-
     def get_partitions(self):
-        try:
-            partitions = check_output(['sinfo', '-h', '--format=%P'], encoding='utf-8')
+        partitions = set(self.get_node_info()['partitions'])
+        return sorted(partitions)
 
-        except CalledProcessError:
-            return []
-        else:
-            if partitions:
-                partitions = partitions.strip().split('\n')
-            else:
-                partitions = []
-        return partitions
-
+    @cachedmethod(attrgetter('nodelist_cache'))
     def get_nodelist(self):
         try:
             nodes = check_output(['sinfo', '-h', '--format=%n,%P'], encoding='utf-8')
-
         except CalledProcessError:
             return []
         else:
@@ -92,8 +83,16 @@ class SlurmAPI(SingletonConfigurable):
                         values[key] = val
             else:
                 nodes = []
-
         return values;
+
+    @cachedmethod(attrgetter('acct_cache'))
+    def get_accounts(self, username):
+        try:
+            string = check_output(['sacctmgr', 'show', 'user', username, 'withassoc',
+                                    'format=account', '-P', '--noheader'], encoding='utf-8')
+        except CalledProcessError:
+            return []
+        return string.split()
 
     @cachedmethod(attrgetter('res_cache'))
     def get_reservations(self):
@@ -121,7 +120,6 @@ class SlurmAPI(SingletonConfigurable):
             return []
 
         accounts = set(accounts)
-        active_res = []
         now = datetime.now()
         return [
             res for res in reservations

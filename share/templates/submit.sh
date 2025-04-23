@@ -12,6 +12,8 @@
 {% if oversubscribe %}#SBATCH --oversubscribe{% endif %}
 {% if reservation %}#SBATCH --reservation={{reservation}}{% endif %}
 #SBATCH --gres={{gpus}}
+{% if partition != "" %}#SBATCH --partition={{partition}}{% endif %}
+{% if nodelist %}#SBATCH --nodelist={{nodelist}}{% endif %}
 unset XDG_RUNTIME_DIR
 
 # Disable variable export with sbatch
